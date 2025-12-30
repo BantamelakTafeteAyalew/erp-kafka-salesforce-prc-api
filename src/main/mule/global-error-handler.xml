@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Global Error Handler
+     =====================================================
+     Centralized error handling for all flows:
+     - Kafka connectivity errors
+     - Deserialization errors
+     - Validation failures
+     - Salesforce authentication errors
+     - Salesforce DML errors
+     - Retry exhaustion
+     - DLQ publishing
+     - Standardized error payloads
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         GLOBAL ERROR HANDLER - Referenced by all flows
+         ===================================================== -->
+    <error-handler name="Global_Error_Handler" doc:name="Global Error Handler">
+        
+        <!-- =====================================================
+             KAFKA CONNECTIVITY ERRORS
+             ===================================================== -->
+        <on-error-propagate type="KAFKA:CONNECTIVITY, KAFKA:SECURITY" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Kafka Connectivity Error">
+            <logger level="ERROR" 
+                message='#["[KAFKA_ERROR] Connectivity issue - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log Kafka Error"/>
+            <ee:transform doc:name="Build Kafka Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "KAFKA_CONNECTIVITY_ERROR",
+    errorMessage: error.description,
+    errorType: error.errorType.identifier,
+    correlationId: vars.correlationId default uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    details: {
+        topic: vars.kafkaTopic default "N/A",
+        partition: vars.kafkaPartition default "N/A",
+        offset: vars.kafkaOffset default "N/A"
+    }
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[503]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             SALESFORCE AUTHENTICATION ERRORS
+             ===================================================== -->
+        <on-error-propagate type="SALESFORCE:CONNECTIVITY, SALESFORCE:INVALID_SESSION" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Salesforce Auth Error">
+            <logger level="ERROR" 
+                message='#["[SALESFORCE_AUTH_ERROR] Authentication failed - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log Salesforce Auth Error"/>
+            <ee:transform doc:name="Build Salesforce Auth Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "SALESFORCE_AUTH_ERROR",
+    errorMessage: "Salesforce authentication failed. Please verify credentials.",
+    errorType: error.errorType.identifier,
+    correlationId: vars.correlationId default uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[503]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             SALESFORCE DML ERRORS (Create/Update/Upsert failures)
+             ===================================================== -->
+        <on-error-propagate type="SALESFORCE:INVALID_INPUT, SALESFORCE:NOT_FOUND" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Salesforce DML Error">
+            <logger level="ERROR" 
+                message='#["[SALESFORCE_DML_ERROR] DML operation failed - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log Salesforce DML Error"/>
+            <ee:transform doc:name="Build Salesforce DML Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "SALESFORCE_DML_ERROR",
+    errorMessage: error.description,
+    errorType: error.errorType.identifier,
+    correlationId: vars.correlationId default uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    details: {
+        objectType: vars.salesforceObjectType default "N/A",
+        externalId: vars.externalId default "N/A",
+        operation: vars.salesforceOperation default "N/A"
+    }
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             VALIDATION ERRORS
+             ===================================================== -->
+        <on-error-propagate type="APP:VALIDATION_ERROR" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Validation Error">
+            <logger level="WARN" 
+                message='#["[VALIDATION_ERROR] Payload validation failed - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log Validation Error"/>
+            <ee:transform doc:name="Build Validation Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "VALIDATION_ERROR",
+    errorMessage: error.description,
+    errorType: error.errorType.identifier,
+    correlationId: vars.correlationId default uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    details: vars.validationErrors default []
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             DESERIALIZATION / TRANSFORMATION ERRORS
+             ===================================================== -->
+        <on-error-propagate type="MULE:EXPRESSION, EXPRESSION:EVALUATION" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Deserialization Error">
+            <logger level="ERROR" 
+                message='#["[DESERIALIZATION_ERROR] Failed to parse message - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log Deserialization Error"/>
+            <ee:transform doc:name="Build Deserialization Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "DESERIALIZATION_ERROR",
+    errorMessage: "Failed to parse incoming message. Invalid format.",
+    errorType: error.errorType.identifier,
+    correlationId: vars.correlationId default uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             RETRY EXHAUSTION ERRORS
+             ===================================================== -->
+        <on-error-propagate type="MULE:RETRY_EXHAUSTED" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Retry Exhausted Error">
+            <logger level="ERROR" 
+                message='#["[RETRY_EXHAUSTED] All retry attempts failed - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log Retry Exhausted"/>
+            <ee:transform doc:name="Build Retry Exhausted Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "RETRY_EXHAUSTED",
+    errorMessage: "Maximum retry attempts exceeded. Message will be sent to DLQ.",
+    errorType: error.errorType.identifier,
+    correlationId: vars.correlationId default uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    retryCount: vars.retryCount default 0
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[503]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             APIKIT ERRORS - Bad Request
+             ===================================================== -->
+        <on-error-propagate type="APIKIT:BAD_REQUEST" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="APIKit Bad Request">
+            <logger level="WARN" 
+                message='#["[APIKIT_ERROR] Bad request - Error: " ++ error.description]'
+                doc:name="Log Bad Request"/>
+            <ee:transform doc:name="Build Bad Request Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "BAD_REQUEST",
+    errorMessage: error.description,
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             APIKIT ERRORS - Not Found
+             ===================================================== -->
+        <on-error-propagate type="APIKIT:NOT_FOUND" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="APIKit Not Found">
+            <logger level="WARN" 
+                message='#["[APIKIT_ERROR] Resource not found - Error: " ++ error.description]'
+                doc:name="Log Not Found"/>
+            <ee:transform doc:name="Build Not Found Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "NOT_FOUND",
+    errorMessage: "The requested resource was not found",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[404]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             APIKIT ERRORS - Method Not Allowed
+             ===================================================== -->
+        <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="APIKit Method Not Allowed">
+            <logger level="WARN" 
+                message='#["[APIKIT_ERROR] Method not allowed - Error: " ++ error.description]'
+                doc:name="Log Method Not Allowed"/>
+            <ee:transform doc:name="Build Method Not Allowed Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "METHOD_NOT_ALLOWED",
+    errorMessage: "The requested method is not allowed for this resource",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[405]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- =====================================================
+             GENERIC/UNKNOWN ERRORS - Catch All
+             ===================================================== -->
+        <on-error-propagate type="ANY" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Generic Error Handler">
+            <logger level="ERROR" 
+                message='#["[GENERIC_ERROR] Unexpected error - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log Generic Error"/>
+            <ee:transform doc:name="Build Generic Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    errorCode: "INTERNAL_SERVER_ERROR",
+    errorMessage: "An unexpected error occurred. Please contact support.",
+    errorType: error.errorType.identifier,
+    correlationId: vars.correlationId default uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[500]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+    </error-handler>
+
+    <!-- =====================================================
+         KAFKA CONSUMER ERROR HANDLER
+         Specialized handler for Kafka consumer flows
+         Includes DLQ publishing logic
+         ===================================================== -->
+    <error-handler name="Kafka_Consumer_Error_Handler" doc:name="Kafka Consumer Error Handler">
+        
+        <!-- Transient errors - can be retried -->
+        <on-error-continue type="SALESFORCE:CONNECTIVITY, KAFKA:CONNECTIVITY" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Transient Error - Retry">
+            <logger level="WARN" 
+                message='#["[TRANSIENT_ERROR] Connectivity issue, will retry - CorrelationId: " ++ (vars.correlationId default "N/A")]'
+                doc:name="Log Transient Error"/>
+            <set-variable variableName="shouldRetry" value="#[true]" doc:name="Set Retry Flag"/>
+        </on-error-continue>
+
+        <!-- Non-transient errors - send to DLQ -->
+        <on-error-continue type="ANY" 
+            enableNotifications="true" 
+            logException="true"
+            doc:name="Non-Transient Error - DLQ">
+            <logger level="ERROR" 
+                message='#["[DLQ_PUBLISH] Sending message to DLQ - CorrelationId: " ++ (vars.correlationId default "N/A") ++ " - Error: " ++ error.description]'
+                doc:name="Log DLQ Publish"/>
+            <set-variable variableName="errorDetails" value="#[error]" doc:name="Capture Error Details"/>
+            <flow-ref name="dlq-publish-subflow" doc:name="Publish to DLQ"/>
+        </on-error-continue>
+
+    </error-handler>
+
+</mule>

@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Salesforce Upsert Subflow
+     =====================================================
+     This file contains Salesforce upsert operations:
+     - Upsert with External ID
+     - Create operation
+     - Update operation
+     - Per-record error handling
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         SALESFORCE UPSERT SUBFLOW
+         Upserts records using External ID field
+         ===================================================== -->
+    <sub-flow name="salesforce-upsert-subflow" doc:name="Salesforce Upsert Subflow">
+        <logger level="DEBUG" 
+            message='#["[SF_UPSERT] Starting upsert - ObjectType: " ++ vars.salesforceObjectType ++ " - ExternalId: " ++ (vars.externalId default "N/A") ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Upsert Start"/>
+        
+        <!-- Store payload for error handling -->
+        <set-variable variableName="upsertPayload" value="#[payload]" doc:name="Store Upsert Payload"/>
+        
+        <!-- Perform upsert with retry -->
+        <try doc:name="Try Upsert with Retry">
+            <until-successful 
+                maxRetries="${retry.max.attempts}" 
+                millisBetweenRetries="${retry.delay.ms}"
+                doc:name="Retry Upsert">
+                
+                <salesforce:upsert 
+                    config-ref="Salesforce_Config" 
+                    objectType="#[vars.salesforceObjectType]" 
+                    externalIdFieldName="${salesforce.external.id.field}"
+                    doc:name="Upsert to Salesforce">
+                    <salesforce:records><![CDATA[#[payload]]]></salesforce:records>
+                </salesforce:upsert>
+                
+            </until-successful>
+            
+            <!-- Process upsert result -->
+            <ee:transform doc:name="Process Upsert Result">
+                <ee:variables>
+                    <!-- Extract Salesforce record ID from result -->
+                    <ee:set-variable variableName="salesforceRecordId"><![CDATA[%dw 2.0
+output application/java
+---
+if (payload[0].id != null) 
+    payload[0].id 
+else 
+    "N/A"]]></ee:set-variable>
+                    
+                    <!-- Check if operation was successful -->
+                    <ee:set-variable variableName="upsertSuccess"><![CDATA[%dw 2.0
+output application/java
+---
+payload[0].success default false]]></ee:set-variable>
+                    
+                    <!-- Capture any errors -->
+                    <ee:set-variable variableName="upsertErrors"><![CDATA[%dw 2.0
+output application/java
+---
+if (payload[0].errors != null and sizeOf(payload[0].errors) > 0)
+    payload[0].errors map (err) -> err.message
+else
+    []]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            
+            <!-- Check for per-record errors -->
+            <choice doc:name="Check Upsert Success">
+                <when expression="#[vars.upsertSuccess == true]">
+                    <logger level="INFO" 
+                        message='#["[SF_UPSERT] Success - ObjectType: " ++ vars.salesforceObjectType ++ " - SalesforceId: " ++ vars.salesforceRecordId ++ " - CorrelationId: " ++ vars.correlationId]'
+                        doc:name="Log Upsert Success"/>
+                </when>
+                <otherwise>
+                    <logger level="ERROR" 
+                        message='#["[SF_UPSERT] Failed - ObjectType: " ++ vars.salesforceObjectType ++ " - Errors: " ++ (vars.upsertErrors joinBy ", ") ++ " - CorrelationId: " ++ vars.correlationId]'
+                        doc:name="Log Upsert Failure"/>
+                    <raise-error type="SALESFORCE:INVALID_INPUT" 
+                        description='#["Salesforce upsert failed: " ++ (vars.upsertErrors joinBy ", ")]'
+                        doc:name="Raise Upsert Error"/>
+                </otherwise>
+            </choice>
+            
+            <error-handler>
+                <on-error-propagate type="SALESFORCE:CONNECTIVITY, SALESFORCE:INVALID_SESSION" doc:name="Connectivity Error">
+                    <logger level="ERROR" 
+                        message='#["[SF_UPSERT] Connectivity error - will retry - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log Connectivity Error"/>
+                </on-error-propagate>
+                
+                <on-error-propagate type="ANY" doc:name="Other Errors">
+                    <logger level="ERROR" 
+                        message='#["[SF_UPSERT] Error - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log Error"/>
+                </on-error-propagate>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- =====================================================
+         SALESFORCE CREATE SUBFLOW
+         Creates new records in Salesforce
+         ===================================================== -->
+    <sub-flow name="salesforce-create-subflow" doc:name="Salesforce Create Subflow">
+        <logger level="DEBUG" 
+            message='#["[SF_CREATE] Starting create - ObjectType: " ++ vars.salesforceObjectType ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Create Start"/>
+        
+        <try doc:name="Try Create">
+            <salesforce:create 
+                config-ref="Salesforce_Config" 
+                type="#[vars.salesforceObjectType]"
+                doc:name="Create in Salesforce">
+                <salesforce:records><![CDATA[#[payload]]]></salesforce:records>
+            </salesforce:create>
+            
+            <!-- Process create result -->
+            <ee:transform doc:name="Process Create Result">
+                <ee:variables>
+                    <ee:set-variable variableName="salesforceRecordId"><![CDATA[%dw 2.0
+output application/java
+---
+payload[0].id default "N/A"]]></ee:set-variable>
+                    <ee:set-variable variableName="createSuccess"><![CDATA[%dw 2.0
+output application/java
+---
+payload[0].success default false]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            
+            <logger level="INFO" 
+                message='#["[SF_CREATE] Complete - ObjectType: " ++ vars.salesforceObjectType ++ " - SalesforceId: " ++ vars.salesforceRecordId ++ " - Success: " ++ vars.createSuccess]'
+                doc:name="Log Create Complete"/>
+            
+            <error-handler>
+                <on-error-propagate type="ANY">
+                    <logger level="ERROR" 
+                        message='#["[SF_CREATE] Error - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log Create Error"/>
+                </on-error-propagate>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- =====================================================
+         SALESFORCE UPDATE SUBFLOW
+         Updates existing records in Salesforce
+         ===================================================== -->
+    <sub-flow name="salesforce-update-subflow" doc:name="Salesforce Update Subflow">
+        <logger level="DEBUG" 
+            message='#["[SF_UPDATE] Starting update - ObjectType: " ++ vars.salesforceObjectType ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Update Start"/>
+        
+        <try doc:name="Try Update">
+            <salesforce:update 
+                config-ref="Salesforce_Config" 
+                type="#[vars.salesforceObjectType]"
+                doc:name="Update in Salesforce">
+                <salesforce:records><![CDATA[#[payload]]]></salesforce:records>
+            </salesforce:update>
+            
+            <!-- Process update result -->
+            <ee:transform doc:name="Process Update Result">
+                <ee:variables>
+                    <ee:set-variable variableName="salesforceRecordId"><![CDATA[%dw 2.0
+output application/java
+---
+payload[0].id default "N/A"]]></ee:set-variable>
+                    <ee:set-variable variableName="updateSuccess"><![CDATA[%dw 2.0
+output application/java
+---
+payload[0].success default false]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            
+            <logger level="INFO" 
+                message='#["[SF_UPDATE] Complete - ObjectType: " ++ vars.salesforceObjectType ++ " - SalesforceId: " ++ vars.salesforceRecordId ++ " - Success: " ++ vars.updateSuccess]'
+                doc:name="Log Update Complete"/>
+            
+            <error-handler>
+                <on-error-propagate type="ANY">
+                    <logger level="ERROR" 
+                        message='#["[SF_UPDATE] Error - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log Update Error"/>
+                </on-error-propagate>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+</mule>

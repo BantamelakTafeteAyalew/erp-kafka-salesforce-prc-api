@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Logging Subflow
+     =====================================================
+     This file contains centralized logging logic:
+     - Structured JSON logging
+     - Correlation ID tracking
+     - Kafka metadata logging
+     - Salesforce operation logging
+     - Compatible with Splunk/ELK
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         MESSAGE RECEIVED LOGGING SUBFLOW
+         Logs when a Kafka message is received
+         ===================================================== -->
+    <sub-flow name="logging-message-received-subflow" doc:name="Log Message Received Subflow">
+        <ee:transform doc:name="Build Received Log Entry">
+            <ee:variables>
+                <ee:set-variable variableName="logEntry"><![CDATA[%dw 2.0
+output application/json
+---
+{
+    logType: "MESSAGE_RECEIVED",
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"},
+    correlationId: vars.correlationId,
+    application: p('app.name'),
+    environment: p('mule.env'),
+    kafka: {
+        topic: vars.kafkaTopic,
+        partition: vars.kafkaPartition,
+        offset: vars.kafkaOffset,
+        key: vars.kafkaKey,
+        timestamp: vars.kafkaTimestamp
+    },
+    message: "Kafka message received for processing"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="INFO" 
+            message='#[vars.logEntry]'
+            doc:name="Log Message Received"/>
+    </sub-flow>
+
+    <!-- =====================================================
+         MESSAGE PROCESSED LOGGING SUBFLOW
+         Logs when a message is successfully processed
+         ===================================================== -->
+    <sub-flow name="logging-message-processed-subflow" doc:name="Log Message Processed Subflow">
+        <ee:transform doc:name="Build Processed Log Entry">
+            <ee:variables>
+                <ee:set-variable variableName="logEntry"><![CDATA[%dw 2.0
+output application/json
+---
+{
+    logType: "MESSAGE_PROCESSED",
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"},
+    correlationId: vars.correlationId,
+    application: p('app.name'),
+    environment: p('mule.env'),
+    eventType: vars.eventType,
+    sourceSystem: vars.sourceSystem,
+    kafka: {
+        topic: vars.kafkaTopic,
+        partition: vars.kafkaPartition,
+        offset: vars.kafkaOffset
+    },
+    salesforce: {
+        recordId: vars.salesforceRecordId default "N/A",
+        objectType: vars.salesforceObjectType default "N/A",
+        operation: vars.salesforceOperation default "N/A"
+    },
+    processingTime: {
+        startTime: vars.processingStartTime as String default "N/A",
+        endTime: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"},
+        durationMs: if (vars.processingStartTime != null) 
+            (now() - vars.processingStartTime) as Number {unit: "milliseconds"} 
+            else 0
+    },
+    message: "Message processed successfully"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="INFO" 
+            message='#[vars.logEntry]'
+            doc:name="Log Message Processed"/>
+    </sub-flow>
+
+    <!-- =====================================================
+         ERROR LOGGING SUBFLOW
+         Logs error details in structured format
+         ===================================================== -->
+    <sub-flow name="logging-error-subflow" doc:name="Log Error Subflow">
+        <ee:transform doc:name="Build Error Log Entry">
+            <ee:variables>
+                <ee:set-variable variableName="logEntry"><![CDATA[%dw 2.0
+output application/json
+---
+{
+    logType: "ERROR",
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"},
+    correlationId: vars.correlationId,
+    application: p('app.name'),
+    environment: p('mule.env'),
+    error: {
+        'type': vars.errorType default "UNKNOWN",
+        description: vars.errorDescription default "Unknown error",
+        retryCount: vars.retryCount default 0
+    },
+    eventType: vars.eventType default "N/A",
+    sourceSystem: vars.sourceSystem default "N/A",
+    kafka: {
+        topic: vars.kafkaTopic default "N/A",
+        partition: vars.kafkaPartition default "N/A",
+        offset: vars.kafkaOffset default "N/A"
+    },
+    message: "Error occurred during message processing"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="ERROR" 
+            message='#[vars.logEntry]'
+            doc:name="Log Error"/>
+    </sub-flow>
+
+    <!-- =====================================================
+         AUDIT LOGGING SUBFLOW
+         Logs audit trail for compliance
+         ===================================================== -->
+    <sub-flow name="logging-audit-subflow" doc:name="Log Audit Subflow">
+        <ee:transform doc:name="Build Audit Log Entry">
+            <ee:variables>
+                <ee:set-variable variableName="logEntry"><![CDATA[%dw 2.0
+output application/json
+---
+{
+    logType: "AUDIT",
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"},
+    correlationId: vars.correlationId,
+    application: p('app.name'),
+    environment: p('mule.env'),
+    action: vars.auditAction default "UNKNOWN",
+    eventType: vars.eventType,
+    sourceSystem: vars.sourceSystem,
+    externalId: vars.externalId default "N/A",
+    salesforceId: vars.salesforceRecordId default "N/A",
+    objectType: vars.salesforceObjectType default "N/A",
+    status: vars.auditStatus default "SUCCESS",
+    message: vars.auditMessage default "Audit log entry"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="INFO" 
+            message='#[vars.logEntry]'
+            doc:name="Log Audit"/>
+    </sub-flow>
+
+    <!-- =====================================================
+         PERFORMANCE METRICS LOGGING SUBFLOW
+         Logs performance metrics for monitoring
+         ===================================================== -->
+    <sub-flow name="logging-metrics-subflow" doc:name="Log Metrics Subflow">
+        <ee:transform doc:name="Build Metrics Log Entry">
+            <ee:variables>
+                <ee:set-variable variableName="logEntry"><![CDATA[%dw 2.0
+output application/json
+---
+{
+    logType: "METRICS",
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"},
+    correlationId: vars.correlationId,
+    application: p('app.name'),
+    environment: p('mule.env'),
+    metrics: {
+        processingTimeMs: vars.processingTimeMs default 0,
+        kafkaLag: vars.kafkaLag default 0,
+        retryCount: vars.retryCount default 0,
+        batchSize: vars.batchSize default 1
+    },
+    eventType: vars.eventType default "N/A",
+    message: "Performance metrics"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="DEBUG" 
+            message='#[vars.logEntry]'
+            doc:name="Log Metrics"/>
+    </sub-flow>
+
+</mule>

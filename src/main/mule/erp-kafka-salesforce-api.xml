@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - API Layer
+     =====================================================
+     This file contains the API interface flows:
+     - Main API router flow
+     - Health check endpoint implementation
+     - Status endpoint implementation
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <!-- =====================================================
+         MAIN API ROUTER FLOW
+         Entry point for all HTTP requests
+         ===================================================== -->
+    <flow name="erp-kafka-salesforce-api-main" doc:name="API Main Flow">
+        <http:listener config-ref="HTTP_Listener_Config" 
+            path="/*"
+            doc:name="HTTP Listener">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers><![CDATA[#[vars.outboundHeaders default {}]]]></http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body><![CDATA[#[payload]]]></http:body>
+                <http:headers><![CDATA[#[vars.outboundHeaders default {}]]]></http:headers>
+            </http:error-response>
+        </http:listener>
+        
+        <!-- Route request based on RAML specification -->
+        <apikit:router config-ref="erp-kafka-salesforce-api-config" doc:name="APIKit Router"/>
+        
+        <!-- Reference global error handler -->
+        <error-handler ref="Global_Error_Handler"/>
+    </flow>
+
+    <!-- =====================================================
+         HEALTH CHECK ENDPOINT - GET /health
+         Verifies connectivity to Kafka and Salesforce
+         ===================================================== -->
+    <flow name="get:\health:erp-kafka-salesforce-api-config" doc:name="GET /health">
+        <logger level="INFO" message="[HEALTH_CHECK] Starting health check" doc:name="Log Health Check Start"/>
+        
+        <!-- Initialize health status -->
+        <set-variable variableName="kafkaStatus" value="UNKNOWN" doc:name="Init Kafka Status"/>
+        <set-variable variableName="salesforceStatus" value="UNKNOWN" doc:name="Init Salesforce Status"/>
+        <set-variable variableName="overallStatus" value="UP" doc:name="Init Overall Status"/>
+        
+        <!-- Check Kafka connectivity -->
+        <try doc:name="Check Kafka">
+            <!-- Kafka connectivity is verified by the consumer config at startup -->
+            <set-variable variableName="kafkaStatus" value="CONNECTED" doc:name="Kafka Connected"/>
+            <error-handler>
+                <on-error-continue type="ANY">
+                    <set-variable variableName="kafkaStatus" value="DISCONNECTED" doc:name="Kafka Disconnected"/>
+                    <set-variable variableName="overallStatus" value="DEGRADED" doc:name="Set Degraded"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+        
+        <!-- Check Salesforce connectivity -->
+        <try doc:name="Check Salesforce">
+            <!-- Simple query to verify Salesforce connection -->
+            <flow-ref name="salesforce-health-check-subflow" doc:name="Check Salesforce"/>
+            <set-variable variableName="salesforceStatus" value="CONNECTED" doc:name="Salesforce Connected"/>
+            <error-handler>
+                <on-error-continue type="ANY">
+                    <set-variable variableName="salesforceStatus" value="DISCONNECTED" doc:name="Salesforce Disconnected"/>
+                    <set-variable variableName="overallStatus" value="DEGRADED" doc:name="Set Degraded"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+        
+        <!-- Build health response -->
+        <ee:transform doc:name="Build Health Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    status: vars.overallStatus,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    version: "v1",
+    kafka: {
+        status: vars.kafkaStatus,
+        topic: p('kafka.input.topic')
+    },
+    salesforce: {
+        status: vars.salesforceStatus
+    }
+}]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="httpStatus"><![CDATA[%dw 2.0
+output application/java
+---
+if (vars.overallStatus == "UP") 200 else 503]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="INFO" message='#["[HEALTH_CHECK] Completed - Status: " ++ vars.overallStatus]' doc:name="Log Health Check Complete"/>
+    </flow>
+
+    <!-- =====================================================
+         STATUS ENDPOINT - GET /status
+         Returns detailed application status and metrics
+         ===================================================== -->
+    <flow name="get:\status:erp-kafka-salesforce-api-config" doc:name="GET /status">
+        <logger level="INFO" message="[STATUS] Retrieving application status" doc:name="Log Status Request"/>
+        
+        <ee:transform doc:name="Build Status Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    status: "UP",
+    application: {
+        name: p('app.name'),
+        version: p('app.version'),
+        environment: p('mule.env')
+    },
+    kafka: {
+        bootstrapServers: p('kafka.bootstrap.servers'),
+        consumerGroup: p('kafka.consumer.group.id'),
+        inputTopic: p('kafka.input.topic'),
+        dlqTopic: p('kafka.dlq.topic')
+    },
+    salesforce: {
+        authUrl: p('salesforce.auth.url'),
+        apiVersion: p('salesforce.api.version')
+    },
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+</mule>

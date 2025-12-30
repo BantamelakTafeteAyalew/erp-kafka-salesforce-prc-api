@@ -1,0 +1,15 @@
+{
+  "eventType": "ORDER_CREATED",
+  "sourceSystem": "DYNAMICS_365",
+  "eventTime": "2025-01-10T14:15:00Z",
+  "correlationId": "dynamics-300075",
+  "payload": {
+    "externalId": "ORD-3001",
+    "orderNumber": "SO-2025-00001",
+    "orderDate": "2025-01-10",
+    "amount": 15750.00,
+    "currency": "USD",
+    "status": "Confirmed",
+    "customerExternalId": "CUST-1001"
+  }
+}

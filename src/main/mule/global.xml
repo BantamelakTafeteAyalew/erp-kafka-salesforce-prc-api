@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Global Configuration
+     =====================================================
+     This file contains all global configurations:
+     - Property loading
+     - HTTP Listener configuration
+     - Kafka Consumer/Producer configurations
+     - Salesforce Connector configuration
+     - Object Store configuration
+     - TLS Context
+     - Thread pools and reconnection strategies
+     
+     NO BUSINESS LOGIC IN THIS FILE
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:tls="http://www.mulesoft.org/schema/mule/tls"
+      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/tls http://www.mulesoft.org/schema/mule/tls/current/mule-tls.xsd
+        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <!-- =====================================================
+         GLOBAL PROPERTIES - Bootstrap Configuration
+         ===================================================== -->
+    <!-- Environment property - override via -Dmule.env=dev|qa|prod -->
+    <global-property name="mule.env" value="dev" doc:name="Environment Property"/>
+    
+    <!-- Secure key - MUST be provided via runtime argument -Dmule.key=xxx -->
+    <global-property name="mule.key" value="mulesoft123456!" doc:name="Secure Key (Override in Runtime)"/>
+
+    <!-- =====================================================
+         CONFIGURATION PROPERTIES - Load environment-specific configs
+         ===================================================== -->
+    <!-- Base configuration properties -->
+    <configuration-properties file="application.yaml" doc:name="Base Configuration"/>
+    
+    <!-- Environment-specific configuration properties -->
+    <configuration-properties file="application-${mule.env}.yaml" doc:name="Environment Configuration"/>
+    
+    <!-- Secure properties with AES encryption -->
+    <secure-properties:config name="Secure_Properties_Config" 
+        file="secure-properties-${mule.env}.yaml" 
+        key="${mule.key}"
+        doc:name="Secure Properties Configuration">
+        <secure-properties:encrypt algorithm="AES" mode="CBC"/>
+    </secure-properties:config>
+
+    <!-- =====================================================
+         HTTP LISTENER CONFIGURATION
+         ===================================================== -->
+    <http:listener-config name="HTTP_Listener_Config" 
+        basePath="${http.basePath}"
+        doc:name="HTTP Listener Configuration">
+        <http:listener-connection 
+            host="${http.host}" 
+            port="${http.port}"
+            usePersistentConnections="true"
+            connectionIdleTimeout="30000">
+            <reconnection>
+                <reconnect frequency="3000" count="5"/>
+            </reconnection>
+        </http:listener-connection>
+    </http:listener-config>
+
+    <!-- =====================================================
+         APIKIT CONFIGURATION
+         ===================================================== -->
+    <apikit:config name="erp-kafka-salesforce-api-config" 
+        api="api/erp-kafka-salesforce-api.raml" 
+        outboundHeadersMapName="outboundHeaders" 
+        httpStatusVarName="httpStatus"
+        doc:name="APIKit Configuration"/>
+
+    <!-- =====================================================
+         KAFKA CONSUMER CONFIGURATION
+         Managed Kafka compatible (Confluent/AWS MSK/Azure Event Hubs)
+         ===================================================== -->
+
+    <!-- =====================================================
+         KAFKA PRODUCER CONFIGURATION (For DLQ Publishing)
+         ===================================================== -->
+    <kafka:producer-config name="Kafka_Producer_DLQ_Config" doc:name="Kafka Producer DLQ Configuration">
+        <kafka:producer-sasl-plain-connection 
+            username="${secure::kafka.username}" 
+            password="${secure::kafka.password}">
+            <reconnection failsDeployment="true">
+                <reconnect-forever frequency="10000"/>
+            </reconnection>
+            <kafka:bootstrap-servers>
+                <kafka:bootstrap-server value="${kafka.bootstrap.servers}"/>
+            </kafka:bootstrap-servers>
+            <tls:context>
+                <tls:trust-store insecure="true"/>
+            </tls:context>
+        </kafka:producer-sasl-plain-connection>
+    </kafka:producer-config>
+
+    <!-- =====================================================
+         SALESFORCE CONNECTOR CONFIGURATION
+         OAuth 2.0 Username Password Authentication
+         ===================================================== -->
+    <salesforce:config name="Salesforce_Config" doc:name="Salesforce Configuration">
+        <salesforce:cached-basic-connection 
+            username="${secure::salesforce.username}" 
+            password="${secure::salesforce.password}" 
+            securityToken="${secure::salesforce.security.token}"
+            url="${salesforce.auth.url}/services/Soap/u/${salesforce.api.version}">
+            <reconnection failsDeployment="true">
+                <reconnect-forever frequency="5000"/>
+            </reconnection>
+        </salesforce:cached-basic-connection>
+    </salesforce:config>
+
+    <!-- =====================================================
+         OBJECT STORE CONFIGURATION
+         Used for idempotent processing and caching
+         ===================================================== -->
+    <os:object-store name="Idempotent_Message_Store"
+        persistent="true"
+        entryTtl="24"
+        entryTtlUnit="HOURS"
+        maxEntries="50000"
+        expirationInterval="1"
+        expirationIntervalUnit="HOURS"
+        doc:name="Idempotent Message Store"/>
+
+    <os:object-store name="Retry_Counter_Store"
+        persistent="true"
+        entryTtl="1"
+        entryTtlUnit="HOURS"
+        maxEntries="10000"
+        expirationInterval="15"
+        expirationIntervalUnit="MINUTES"
+        doc:name="Retry Counter Store"/>
+
+</mule>

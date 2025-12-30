@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Salesforce Query Subflow
+     =====================================================
+     This file contains Salesforce query operations:
+     - Query by External ID
+     - Query by Salesforce ID
+     - Health check query
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         SALESFORCE QUERY ACCOUNT SUBFLOW
+         Queries Account by External ID
+         ===================================================== -->
+    <sub-flow name="salesforce-query-account-subflow" doc:name="Salesforce Query Account Subflow">
+        <logger level="DEBUG" 
+            message='#["[SF_QUERY] Querying Account - ExternalId: " ++ vars.accountExternalId ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Query Start"/>
+        
+        <try doc:name="Try Query">
+            <salesforce:query config-ref="Salesforce_Config" doc:name="Query Account">
+                <salesforce:salesforce-query><![CDATA[SELECT Id, Name, External_ID__c 
+FROM Account 
+WHERE External_ID__c = :externalId 
+LIMIT 1]]></salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[{
+    externalId: vars.accountExternalId
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            
+            <!-- Process query result -->
+            <ee:transform doc:name="Extract Account ID">
+                <ee:variables>
+                    <ee:set-variable variableName="parentAccountId"><![CDATA[%dw 2.0
+output application/java
+---
+if (sizeOf(payload) > 0) 
+    payload[0].Id 
+else 
+    null]]></ee:set-variable>
+                    <ee:set-variable variableName="accountFound"><![CDATA[%dw 2.0
+output application/java
+---
+sizeOf(payload) > 0]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            
+            <choice doc:name="Account Found?">
+                <when expression="#[vars.accountFound == true]">
+                    <logger level="DEBUG" 
+                        message='#["[SF_QUERY] Account found - ExternalId: " ++ vars.accountExternalId ++ " - SalesforceId: " ++ vars.parentAccountId]'
+                        doc:name="Log Account Found"/>
+                </when>
+                <otherwise>
+                    <logger level="WARN" 
+                        message='#["[SF_QUERY] Account not found - ExternalId: " ++ vars.accountExternalId]'
+                        doc:name="Log Account Not Found"/>
+                </otherwise>
+            </choice>
+            
+            <error-handler>
+                <on-error-continue type="ANY">
+                    <logger level="ERROR" 
+                        message='#["[SF_QUERY] Error querying Account - ExternalId: " ++ vars.accountExternalId ++ " - Error: " ++ error.description]'
+                        doc:name="Log Query Error"/>
+                    <set-variable variableName="parentAccountId" value="#[null]" doc:name="Set Null Account ID"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- =====================================================
+         SALESFORCE QUERY BY ID SUBFLOW
+         Queries any object by Salesforce ID
+         ===================================================== -->
+    <sub-flow name="salesforce-query-by-id-subflow" doc:name="Salesforce Query By ID Subflow">
+        <logger level="DEBUG" 
+            message='#["[SF_QUERY] Querying by ID - ObjectType: " ++ vars.salesforceObjectType ++ " - Id: " ++ vars.salesforceId]'
+            doc:name="Log Query Start"/>
+        
+        <try doc:name="Try Query">
+            <salesforce:query config-ref="Salesforce_Config" doc:name="Query by ID">
+                <salesforce:salesforce-query><![CDATA[#["SELECT Id, Name FROM " ++ vars.salesforceObjectType ++ " WHERE Id = :recordId LIMIT 1"]]]></salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[{
+    recordId: vars.salesforceId
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            
+            <ee:transform doc:name="Process Query Result">
+                <ee:variables>
+                    <ee:set-variable variableName="recordFound"><![CDATA[%dw 2.0
+output application/java
+---
+sizeOf(payload) > 0]]></ee:set-variable>
+                    <ee:set-variable variableName="queryResult"><![CDATA[%dw 2.0
+output application/java
+---
+if (sizeOf(payload) > 0) payload[0] else null]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            
+            <error-handler>
+                <on-error-continue type="ANY">
+                    <logger level="ERROR" 
+                        message='#["[SF_QUERY] Error - Error: " ++ error.description]'
+                        doc:name="Log Query Error"/>
+                    <set-variable variableName="recordFound" value="#[false]" doc:name="Set Not Found"/>
+                    <set-variable variableName="queryResult" value="#[null]" doc:name="Set Null Result"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- =====================================================
+         SALESFORCE HEALTH CHECK SUBFLOW
+         Simple query to verify Salesforce connectivity
+         ===================================================== -->
+    <sub-flow name="salesforce-health-check-subflow" doc:name="Salesforce Health Check Subflow">
+        <logger level="DEBUG" message="[SF_HEALTH] Checking Salesforce connectivity" doc:name="Log Health Check"/>
+        
+        <salesforce:query config-ref="Salesforce_Config" doc:name="Health Check Query">
+            <salesforce:salesforce-query><![CDATA[SELECT Id FROM Organization LIMIT 1]]></salesforce:salesforce-query>
+            <salesforce:parameters><![CDATA[#[{}]]]></salesforce:parameters>
+        </salesforce:query>
+        
+        <logger level="DEBUG" message="[SF_HEALTH] Salesforce connectivity verified" doc:name="Log Health OK"/>
+    </sub-flow>
+
+</mule>

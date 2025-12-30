@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - DLQ Subflow
+     =====================================================
+     This file contains Dead Letter Queue logic:
+     - Publishes failed messages to DLQ topic
+     - Enriches messages with error details
+     - Preserves original message for reprocessing
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         DLQ PUBLISH SUBFLOW
+         Publishes failed messages to Dead Letter Queue
+         ===================================================== -->
+    <sub-flow name="dlq-publish-subflow" doc:name="DLQ Publish Subflow">
+        <logger level="INFO" 
+            message='#["[DLQ] Preparing message for DLQ - CorrelationId: " ++ vars.correlationId ++ " - ErrorType: " ++ (vars.errorType default "UNKNOWN")]'
+            doc:name="Log DLQ Preparation"/>
+        
+        <!-- Build DLQ message with error details -->
+        <ee:transform doc:name="Build DLQ Message">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    // Original message preserved for reprocessing
+    originalMessage: vars.originalPayload default payload,
+    
+    // Error details
+    error: {
+        'type': vars.errorType default "UNKNOWN",
+        description: vars.errorDescription default "Unknown error occurred",
+        timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+    },
+    
+    // Processing metadata
+    metadata: {
+        correlationId: vars.correlationId,
+        eventType: vars.eventType default "UNKNOWN",
+        sourceSystem: vars.sourceSystem default "UNKNOWN",
+        
+        // Kafka source metadata
+        kafka: {
+            originalTopic: vars.kafkaTopic,
+            partition: vars.kafkaPartition,
+            offset: vars.kafkaOffset,
+            key: vars.kafkaKey,
+            timestamp: vars.kafkaTimestamp
+        },
+        
+        // Processing attempt info
+        processingAttempt: {
+            attemptNumber: (vars.retryCount default 0) + 1,
+            firstAttemptTime: vars.processingStartTime,
+            failedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+        }
+    }
+}]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <!-- Build DLQ headers -->
+                <ee:set-variable variableName="dlqHeaders"><![CDATA[%dw 2.0
+output application/java
+---
+{
+    "correlation-id": vars.correlationId,
+    "error-type": vars.errorType default "UNKNOWN",
+    "original-topic": vars.kafkaTopic default "unknown",
+    "original-partition": vars.kafkaPartition as String default "0",
+    "original-offset": vars.kafkaOffset as String default "0",
+    "event-type": vars.eventType default "UNKNOWN",
+    "source-system": vars.sourceSystem default "UNKNOWN",
+    "failed-at": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    "retry-count": (vars.retryCount default 0) as String
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <!-- Publish to DLQ topic -->
+        <try doc:name="Try Publish to DLQ">
+            <kafka:publish 
+                config-ref="Kafka_Producer_DLQ_Config" 
+                topic="${kafka.dlq.topic}" 
+                key="#[vars.correlationId]"
+                doc:name="Publish to DLQ">
+                <kafka:message><![CDATA[#[payload]]]></kafka:message>
+                <kafka:headers><![CDATA[#[vars.dlqHeaders]]]></kafka:headers>
+            </kafka:publish>
+            
+            <logger level="INFO" 
+                message='#["[DLQ] Message published successfully - CorrelationId: " ++ vars.correlationId ++ " - Topic: ${kafka.dlq.topic}"]'
+                doc:name="Log DLQ Success"/>
+            
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="DLQ Publish Failed">
+                    <!-- Log critical error - DLQ publish failed -->
+                    <logger level="ERROR" 
+                        message='#["[DLQ_CRITICAL] Failed to publish to DLQ - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log DLQ Failure"/>
+                    
+                    <!-- Log the message content for manual recovery -->
+                    <logger level="ERROR" 
+                        message='#["[DLQ_RECOVERY] Original message for manual recovery - CorrelationId: " ++ vars.correlationId ++ " - Offset: " ++ (vars.kafkaOffset as String default "N/A")]'
+                        doc:name="Log Recovery Info"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- =====================================================
+         DLQ REPROCESS SUBFLOW
+         Utility subflow for reprocessing DLQ messages
+         Can be triggered manually or via scheduled job
+         ===================================================== -->
+    <sub-flow name="dlq-reprocess-subflow" doc:name="DLQ Reprocess Subflow">
+        <logger level="INFO" 
+            message='#["[DLQ_REPROCESS] Starting reprocess - CorrelationId: " ++ (payload.metadata.correlationId default "N/A")]'
+            doc:name="Log Reprocess Start"/>
+        
+        <!-- Extract original message -->
+        <ee:transform doc:name="Extract Original Message">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload.originalMessage]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="correlationId"><![CDATA[payload.metadata.correlationId]]></ee:set-variable>
+                <ee:set-variable variableName="retryCount"><![CDATA[payload.metadata.processingAttempt.attemptNumber]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="INFO" 
+            message='#["[DLQ_REPROCESS] Original message extracted - CorrelationId: " ++ vars.correlationId ++ " - RetryCount: " ++ (vars.retryCount as String)]'
+            doc:name="Log Message Extracted"/>
+    </sub-flow>
+
+</mule>

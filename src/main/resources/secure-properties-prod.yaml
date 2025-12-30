@@ -1,0 +1,32 @@
+# =====================================================
+# ERP Kafka Salesforce Integration - PROD Secure Props
+# =====================================================
+# CRITICAL: Production credentials - handle with care
+# Encrypt using production-specific key:
+# java -cp secure-properties-tool.jar \
+#   com.mulesoft.tools.SecurePropertiesTool \
+#   string encrypt AES CBC <your-prod-key> <value>
+# =====================================================
+
+# Kafka Security Credentials - PROD
+kafka:
+  username: "![ENCRYPTED_PROD_KAFKA_USERNAME]"
+  password: "![ENCRYPTED_PROD_KAFKA_PASSWORD]"
+  truststore:
+    password: "![ENCRYPTED_PROD_TRUSTSTORE_PASSWORD]"
+
+# Salesforce OAuth Credentials - PROD
+salesforce:
+  username: "![ENCRYPTED_PROD_SF_USERNAME]"
+  password: "![ENCRYPTED_PROD_SF_PASSWORD]"
+  security:
+    token: "![ENCRYPTED_PROD_SF_SECURITY_TOKEN]"
+  client:
+    id: "![ENCRYPTED_PROD_SF_CLIENT_ID]"
+    secret: "![ENCRYPTED_PROD_SF_CLIENT_SECRET]"
+
+# API Security - PROD
+api:
+  client:
+    id: "![ENCRYPTED_PROD_API_CLIENT_ID]"
+    secret: "![ENCRYPTED_PROD_API_CLIENT_SECRET]"

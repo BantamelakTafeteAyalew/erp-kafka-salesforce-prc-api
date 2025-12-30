@@ -1,0 +1,15 @@
+{
+  "eventType": "CONTACT_CREATED",
+  "sourceSystem": "ORACLE_EBS",
+  "eventTime": "2025-01-10T12:00:00Z",
+  "correlationId": "oracle-200050",
+  "payload": {
+    "externalId": "CONT-2001",
+    "firstName": "John",
+    "lastName": "Smith",
+    "email": "john.smith@acme.com",
+    "phone": "+1-555-123-4567",
+    "title": "VP of Operations",
+    "accountExternalId": "CUST-1001"
+  }
+}

@@ -1,0 +1,31 @@
+# =====================================================
+# ERP Kafka Salesforce Integration - Secure Properties
+# =====================================================
+# IMPORTANT: This file contains encrypted sensitive values
+# Values must be encrypted using the Secure Properties Tool
+# Format: ![encrypted_value]
+# Encryption: AES/CBC with environment-specific key
+# =====================================================
+
+# Kafka Security Credentials
+kafka:
+  username: "![ENCRYPTED_KAFKA_USERNAME]"
+  password: "![ENCRYPTED_KAFKA_PASSWORD]"
+  truststore:
+    password: "![ENCRYPTED_TRUSTSTORE_PASSWORD]"
+
+# Salesforce OAuth Credentials
+salesforce:
+  username: "![ENCRYPTED_SF_USERNAME]"
+  password: "![ENCRYPTED_SF_PASSWORD]"
+  security:
+    token: "![ENCRYPTED_SF_SECURITY_TOKEN]"
+  client:
+    id: "![ENCRYPTED_SF_CLIENT_ID]"
+    secret: "![ENCRYPTED_SF_CLIENT_SECRET]"
+
+# API Security
+api:
+  client:
+    id: "![ENCRYPTED_API_CLIENT_ID]"
+    secret: "![ENCRYPTED_API_CLIENT_SECRET]"

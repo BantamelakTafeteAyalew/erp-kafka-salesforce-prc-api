@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Validation Subflow
+     =====================================================
+     This file contains event validation logic:
+     - Schema validation
+     - Required field validation
+     - Business rule validation
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         MAIN VALIDATION SUBFLOW
+         Entry point for all event validation
+         ===================================================== -->
+    <sub-flow name="validation-subflow" doc:name="Validation Subflow">
+        <logger level="DEBUG" 
+            message='#["[VALIDATION] Starting validation - EventType: " ++ vars.eventType ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Validation Start"/>
+        
+        <!-- Initialize validation errors list -->
+        <set-variable variableName="validationErrors" value="#[[]]" doc:name="Init Validation Errors"/>
+        
+        <!-- Validate common required fields -->
+        <flow-ref name="validate-common-fields-subflow" doc:name="Validate Common Fields"/>
+        
+        <!-- Validate event-specific fields based on event type -->
+        <choice doc:name="Route to Event-Specific Validation">
+            <when expression="#[vars.eventType == 'CUSTOMER_CREATED' or vars.eventType == 'CUSTOMER_UPDATED']">
+                <flow-ref name="validate-customer-event-subflow" doc:name="Validate Customer Event"/>
+            </when>
+            <when expression="#[vars.eventType == 'CONTACT_CREATED' or vars.eventType == 'CONTACT_UPDATED']">
+                <flow-ref name="validate-contact-event-subflow" doc:name="Validate Contact Event"/>
+            </when>
+            <when expression="#[vars.eventType == 'ORDER_CREATED' or vars.eventType == 'ORDER_UPDATED']">
+                <flow-ref name="validate-order-event-subflow" doc:name="Validate Order Event"/>
+            </when>
+            <otherwise>
+                <!-- Unknown event types pass through with warning -->
+                <logger level="WARN" 
+                    message='#["[VALIDATION] Unknown event type, skipping specific validation: " ++ vars.eventType]'
+                    doc:name="Log Unknown Event Type"/>
+            </otherwise>
+        </choice>
+        
+        <!-- Check if any validation errors occurred -->
+        <choice doc:name="Has Validation Errors?">
+            <when expression="#[sizeOf(vars.validationErrors) > 0]">
+                <logger level="WARN" 
+                    message='#["[VALIDATION_FAILED] Errors found - CorrelationId: " ++ vars.correlationId ++ " - Errors: " ++ (vars.validationErrors joinBy ", ")]'
+                    doc:name="Log Validation Errors"/>
+                <raise-error type="APP:VALIDATION_ERROR" 
+                    description='#["Validation failed: " ++ (vars.validationErrors joinBy ", ")]'
+                    doc:name="Raise Validation Error"/>
+            </when>
+            <otherwise>
+                <logger level="DEBUG" 
+                    message='#["[VALIDATION] Passed - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Validation Passed"/>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <!-- =====================================================
+         COMMON FIELDS VALIDATION
+         Validates fields required for all event types
+         ===================================================== -->
+    <sub-flow name="validate-common-fields-subflow" doc:name="Validate Common Fields Subflow">
+        <!-- Validate eventType is present -->
+        <choice doc:name="Check eventType">
+            <when expression="#[isEmpty(payload.eventType)]">
+                <ee:transform doc:name="Add eventType Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["eventType is required"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+        
+        <!-- Validate sourceSystem is present -->
+        <choice doc:name="Check sourceSystem">
+            <when expression="#[isEmpty(payload.sourceSystem)]">
+                <ee:transform doc:name="Add sourceSystem Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["sourceSystem is required"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+        
+        <!-- Validate payload object exists -->
+        <choice doc:name="Check payload object">
+            <when expression="#[payload.payload == null]">
+                <ee:transform doc:name="Add payload Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload object is required"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+        
+        <!-- Validate externalId is present in payload -->
+        <choice doc:name="Check externalId">
+            <when expression="#[isEmpty(payload.payload.externalId)]">
+                <ee:transform doc:name="Add externalId Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload.externalId is required"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+    </sub-flow>
+
+    <!-- =====================================================
+         CUSTOMER EVENT VALIDATION
+         Validates CUSTOMER_CREATED and CUSTOMER_UPDATED events
+         ===================================================== -->
+    <sub-flow name="validate-customer-event-subflow" doc:name="Validate Customer Event Subflow">
+        <!-- Validate name is present for customer -->
+        <choice doc:name="Check name">
+            <when expression="#[isEmpty(payload.payload.name)]">
+                <ee:transform doc:name="Add name Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload.name is required for customer events"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+        
+        <!-- Validate name length -->
+        <choice doc:name="Check name length">
+            <when expression='#[!isEmpty(payload.payload.name) and sizeOf(payload.payload.name) > 255]'>
+                <ee:transform doc:name="Add name length Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload.name exceeds maximum length of 255 characters"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+    </sub-flow>
+
+    <!-- =====================================================
+         CONTACT EVENT VALIDATION
+         Validates CONTACT_CREATED and CONTACT_UPDATED events
+         ===================================================== -->
+    <sub-flow name="validate-contact-event-subflow" doc:name="Validate Contact Event Subflow">
+        <!-- Validate lastName or name is present -->
+        <choice doc:name="Check lastName or name">
+            <when expression="#[isEmpty(payload.payload.lastName) and isEmpty(payload.payload.name)]">
+                <ee:transform doc:name="Add lastName Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload.lastName or payload.name is required for contact events"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+        
+        <!-- Validate email format if present -->
+        <choice doc:name="Check email format">
+            <when expression='#[!isEmpty(payload.payload.email) and not (payload.payload.email matches /^[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}$/)]'>
+                <ee:transform doc:name="Add email format Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload.email has invalid format"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+    </sub-flow>
+
+    <!-- =====================================================
+         ORDER EVENT VALIDATION
+         Validates ORDER_CREATED and ORDER_UPDATED events
+         ===================================================== -->
+    <sub-flow name="validate-order-event-subflow" doc:name="Validate Order Event Subflow">
+        <!-- Validate orderNumber or externalId is present -->
+        <choice doc:name="Check orderNumber">
+            <when expression="#[isEmpty(payload.payload.orderNumber) and isEmpty(payload.payload.externalId)]">
+                <ee:transform doc:name="Add orderNumber Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload.orderNumber or payload.externalId is required for order events"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+        
+        <!-- Validate amount is a valid number if present -->
+        <choice doc:name="Check amount">
+            <when expression='#[payload.payload.amount != null and !(payload.payload.amount is Number)]'>
+                <ee:transform doc:name="Add amount Error">
+                    <ee:variables>
+                        <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+---
+vars.validationErrors ++ ["payload.amount must be a valid number"]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+    </sub-flow>
+
+</mule>

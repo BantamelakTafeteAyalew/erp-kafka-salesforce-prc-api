@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Kafka to Salesforce Flow
+     =====================================================
+     This file contains the main processing flow:
+     - Event transformation
+     - Salesforce object mapping
+     - Upsert orchestration
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         CUSTOMER CREATED EVENT HANDLER
+         Processes CUSTOMER_CREATED events from ERP
+         ===================================================== -->
+    <flow name="process-customer-created-flow" doc:name="Process Customer Created">
+        <logger level="INFO" 
+            message='#["[CUSTOMER_CREATED] Processing - CorrelationId: " ++ vars.correlationId ++ " - ExternalId: " ++ (payload.payload.externalId default "N/A")]'
+            doc:name="Log Customer Created"/>
+        
+        <!-- Transform ERP Customer to Salesforce Account -->
+        <ee:transform doc:name="Map to Salesforce Account">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+// Transform ERP Customer event to Salesforce Account format
+---
+[{
+    // External ID for upsert operation
+    External_ID__c: payload.payload.externalId,
+    
+    // Account Name (required field)
+    Name: payload.payload.name,
+    
+    // Industry mapping
+    Industry: payload.payload.industry default null,
+    
+    // Billing Country
+    BillingCountry: payload.payload.country default null,
+    
+    // Source system tracking
+    Description: "Created from " ++ (payload.sourceSystem default "ERP") ++ " on " ++ (payload.eventTime default (now() as String)),
+    
+    // Custom fields for integration tracking
+    ERP_Source_System__c: payload.sourceSystem default null,
+    ERP_Correlation_ID__c: vars.correlationId
+}]]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="salesforceObjectType"><![CDATA["Account"]]></ee:set-variable>
+                <ee:set-variable variableName="salesforceOperation"><![CDATA["upsert"]]></ee:set-variable>
+                <ee:set-variable variableName="externalId"><![CDATA[payload.payload.externalId]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <!-- Upsert to Salesforce -->
+        <flow-ref name="salesforce-upsert-subflow" doc:name="Upsert Account"/>
+        
+        <logger level="INFO" 
+            message='#["[CUSTOMER_CREATED] Completed - CorrelationId: " ++ vars.correlationId ++ " - SalesforceId: " ++ (vars.salesforceRecordId default "N/A")]'
+            doc:name="Log Customer Created Complete"/>
+    </flow>
+
+    <!-- =====================================================
+         CUSTOMER UPDATED EVENT HANDLER
+         Processes CUSTOMER_UPDATED events from ERP
+         ===================================================== -->
+    <flow name="process-customer-updated-flow" doc:name="Process Customer Updated">
+        <logger level="INFO" 
+            message='#["[CUSTOMER_UPDATED] Processing - CorrelationId: " ++ vars.correlationId ++ " - ExternalId: " ++ (payload.payload.externalId default "N/A")]'
+            doc:name="Log Customer Updated"/>
+        
+        <!-- Transform ERP Customer Update to Salesforce Account -->
+        <ee:transform doc:name="Map to Salesforce Account Update">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+// Transform ERP Customer update event to Salesforce Account format
+---
+[{
+    // External ID for upsert operation
+    External_ID__c: payload.payload.externalId,
+    
+    // Only include fields that are present in the update
+    (Name: payload.payload.name) if (payload.payload.name?),
+    (Industry: payload.payload.industry) if (payload.payload.industry?),
+    (BillingCountry: payload.payload.country) if (payload.payload.country?),
+    
+    // Update tracking
+    Description: "Updated from " ++ (payload.sourceSystem default "ERP") ++ " on " ++ (payload.eventTime default (now() as String)),
+    ERP_Last_Modified__c: now()
+}]]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="salesforceObjectType"><![CDATA["Account"]]></ee:set-variable>
+                <ee:set-variable variableName="salesforceOperation"><![CDATA["upsert"]]></ee:set-variable>
+                <ee:set-variable variableName="externalId"><![CDATA[payload.payload.externalId]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <!-- Upsert to Salesforce -->
+        <flow-ref name="salesforce-upsert-subflow" doc:name="Upsert Account"/>
+        
+        <logger level="INFO" 
+            message='#["[CUSTOMER_UPDATED] Completed - CorrelationId: " ++ vars.correlationId ++ " - SalesforceId: " ++ (vars.salesforceRecordId default "N/A")]'
+            doc:name="Log Customer Updated Complete"/>
+    </flow>
+
+    <!-- =====================================================
+         CONTACT CREATED EVENT HANDLER
+         Processes CONTACT_CREATED events from ERP
+         ===================================================== -->
+    <flow name="process-contact-created-flow" doc:name="Process Contact Created">
+        <logger level="INFO" 
+            message='#["[CONTACT_CREATED] Processing - CorrelationId: " ++ vars.correlationId ++ " - ExternalId: " ++ (payload.payload.externalId default "N/A")]'
+            doc:name="Log Contact Created"/>
+        
+        <!-- First, lookup the parent Account -->
+        <choice doc:name="Has Account Reference?">
+            <when expression="#[payload.payload.accountExternalId != null]">
+                <set-variable variableName="accountExternalId" value="#[payload.payload.accountExternalId]" doc:name="Store Account External ID"/>
+                <flow-ref name="salesforce-query-account-subflow" doc:name="Query Parent Account"/>
+            </when>
+            <otherwise>
+                <set-variable variableName="parentAccountId" value="#[null]" doc:name="No Parent Account"/>
+            </otherwise>
+        </choice>
+        
+        <!-- Transform ERP Contact to Salesforce Contact -->
+        <ee:transform doc:name="Map to Salesforce Contact">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+// Transform ERP Contact event to Salesforce Contact format
+var eventPayload = payload.payload
+---
+[{
+    // External ID for upsert operation
+    External_ID__c: eventPayload.externalId,
+    
+    // Contact Name
+    FirstName: eventPayload.firstName default null,
+    LastName: eventPayload.lastName default eventPayload.name default "Unknown",
+    
+    // Contact Details
+    Email: eventPayload.email default null,
+    Phone: eventPayload.phone default null,
+    Title: eventPayload.title default null,
+    
+    // Parent Account (if found)
+    (AccountId: vars.parentAccountId) if (vars.parentAccountId != null),
+    
+    // Source tracking
+    Description: "Created from " ++ (payload.sourceSystem default "ERP") ++ " on " ++ (payload.eventTime default (now() as String)),
+    ERP_Source_System__c: payload.sourceSystem default null,
+    ERP_Correlation_ID__c: vars.correlationId
+}]]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="salesforceObjectType"><![CDATA["Contact"]]></ee:set-variable>
+                <ee:set-variable variableName="salesforceOperation"><![CDATA["upsert"]]></ee:set-variable>
+                <ee:set-variable variableName="externalId"><![CDATA[payload.payload.externalId]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <!-- Upsert to Salesforce -->
+        <flow-ref name="salesforce-upsert-subflow" doc:name="Upsert Contact"/>
+        
+        <logger level="INFO" 
+            message='#["[CONTACT_CREATED] Completed - CorrelationId: " ++ vars.correlationId ++ " - SalesforceId: " ++ (vars.salesforceRecordId default "N/A")]'
+            doc:name="Log Contact Created Complete"/>
+    </flow>
+
+    <!-- =====================================================
+         ORDER CREATED EVENT HANDLER
+         Processes ORDER_CREATED events from ERP
+         Maps to Custom Object in Salesforce
+         ===================================================== -->
+    <flow name="process-order-created-flow" doc:name="Process Order Created">
+        <logger level="INFO" 
+            message='#["[ORDER_CREATED] Processing - CorrelationId: " ++ vars.correlationId ++ " - ExternalId: " ++ (payload.payload.externalId default "N/A")]'
+            doc:name="Log Order Created"/>
+        
+        <!-- Transform ERP Order to Salesforce Custom Object -->
+        <ee:transform doc:name="Map to Salesforce Order">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+// Transform ERP Order event to Salesforce Custom Object format
+var eventPayload = payload.payload
+---
+[{
+    // External ID for upsert operation
+    External_ID__c: eventPayload.externalId,
+    
+    // Order Details
+    Name: eventPayload.orderNumber default eventPayload.externalId,
+    Order_Date__c: eventPayload.orderDate default null,
+    Order_Amount__c: eventPayload.amount default 0,
+    Order_Status__c: eventPayload.status default "New",
+    Currency__c: eventPayload.currency default "USD",
+    
+    // Source tracking
+    ERP_Source_System__c: payload.sourceSystem default null,
+    ERP_Correlation_ID__c: vars.correlationId,
+    Integration_Timestamp__c: now()
+}]]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="salesforceObjectType"><![CDATA["ERP_Order__c"]]></ee:set-variable>
+                <ee:set-variable variableName="salesforceOperation"><![CDATA["upsert"]]></ee:set-variable>
+                <ee:set-variable variableName="externalId"><![CDATA[payload.payload.externalId]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <!-- Upsert to Salesforce -->
+        <flow-ref name="salesforce-upsert-subflow" doc:name="Upsert Order"/>
+        
+        <logger level="INFO" 
+            message='#["[ORDER_CREATED] Completed - CorrelationId: " ++ vars.correlationId ++ " - SalesforceId: " ++ (vars.salesforceRecordId default "N/A")]'
+            doc:name="Log Order Created Complete"/>
+    </flow>
+
+    <!-- =====================================================
+         GENERIC EVENT HANDLER
+         Handles unknown/unsupported event types
+         ===================================================== -->
+    <flow name="process-unknown-event-flow" doc:name="Process Unknown Event">
+        <logger level="WARN" 
+            message='#["[UNKNOWN_EVENT] Unsupported event type: " ++ vars.eventType ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Unknown Event"/>
+        
+        <!-- Store for manual review or future processing -->
+        <ee:transform doc:name="Prepare Unknown Event">
+            <ee:variables>
+                <ee:set-variable variableName="unknownEventDetails"><![CDATA[%dw 2.0
+output application/json
+---
+{
+    eventType: vars.eventType,
+    sourceSystem: vars.sourceSystem,
+    correlationId: vars.correlationId,
+    receivedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    kafkaMetadata: {
+        topic: vars.kafkaTopic,
+        partition: vars.kafkaPartition,
+        offset: vars.kafkaOffset
+    },
+    payload: payload
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="INFO" 
+            message='#["[UNKNOWN_EVENT] Logged for review - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Unknown Event Stored"/>
+    </flow>
+
+</mule>

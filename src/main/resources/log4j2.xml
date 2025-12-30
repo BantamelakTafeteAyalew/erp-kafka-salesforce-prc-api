@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Log4j2 Configuration
+     =====================================================
+     Configured for:
+     - JSON structured logging (Splunk/ELK compatible)
+     - Correlation ID tracking
+     - Rolling file appender
+     - Console output for development
+     ===================================================== -->
+<Configuration status="WARN">
+
+    <Properties>
+        <!-- Application name for log identification -->
+        <Property name="APP_NAME">erp-kafka-salesforce-integration</Property>
+        <!-- Log file location -->
+        <Property name="LOG_DIR">${sys:mule.home}${sys:file.separator}logs</Property>
+    </Properties>
+
+    <Appenders>
+        <!-- Rolling File Appender - JSON Format for Splunk/ELK -->
+        <RollingFile name="file" 
+            fileName="${LOG_DIR}${sys:file.separator}${APP_NAME}.log"
+            filePattern="${LOG_DIR}${sys:file.separator}${APP_NAME}-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout>
+                <Pattern>{"timestamp":"%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ}","level":"%-5p","thread":"%t","logger":"%c","correlationId":"%X{correlationId}","processor":"%X{processorPath}","message":"%m"}%n</Pattern>
+            </PatternLayout>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30">
+                <Delete basePath="${LOG_DIR}" maxDepth="1">
+                    <IfFileName glob="${APP_NAME}-*.log.gz"/>
+                    <IfLastModified age="30d"/>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+        
+        <!-- Console Appender - Human readable for development -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%-5p %d{yyyy-MM-dd HH:mm:ss.SSS} [%t] [correlationId: %X{correlationId}] %c{1}: %m%n"/>
+        </Console>
+    </Appenders>
+
+    <Loggers>
+        <!-- HTTP Connector Logging -->
+        <AsyncLogger name="org.mule.service.http" level="WARN"/>
+        <AsyncLogger name="org.mule.extension.http" level="WARN"/>
+        
+        <!-- Kafka Connector Logging -->
+        <AsyncLogger name="org.apache.kafka" level="WARN"/>
+        <AsyncLogger name="com.mulesoft.connectors.kafka" level="INFO"/>
+        
+        <!-- Salesforce Connector Logging -->
+        <AsyncLogger name="com.mulesoft.connectors.salesforce" level="INFO"/>
+        
+        <!-- Object Store Logging -->
+        <AsyncLogger name="org.mule.extension.objectstore" level="WARN"/>
+        
+        <!-- Mule Core Logger -->
+        <AsyncLogger name="org.mule.runtime.core.internal.processor.LoggerMessageProcessor" level="INFO"/>
+        
+        <!-- Application Logger - Set to DEBUG for troubleshooting -->
+        <AsyncLogger name="org.mule.runtime" level="INFO"/>
+        
+        <!-- Root Logger -->
+        <AsyncRoot level="INFO">
+            <AppenderRef ref="file"/>
+            <AppenderRef ref="Console"/>
+        </AsyncRoot>
+    </Loggers>
+
+</Configuration>

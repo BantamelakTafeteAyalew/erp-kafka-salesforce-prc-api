@@ -1,0 +1,66 @@
+# =====================================================
+# ERP Kafka Salesforce Integration - QA Environment
+# =====================================================
+
+# HTTP Configuration - QA
+http:
+  host: "0.0.0.0"
+  port: "8081"
+  basePath: "/api/v1"
+
+# Kafka Configuration - QA
+kafka:
+  bootstrap:
+    servers: "qa-kafka.example.com:9092"
+  consumer:
+    group:
+      id: "erp-salesforce-consumer-group-qa"
+  input:
+    topic: "erp-events-qa"
+  dlq:
+    topic: "erp-events-dlq-qa"
+  offset:
+    strategy: "EARLIEST"
+  retry:
+    count: "3"
+    backoff:
+      initial: "1000"
+      max: "30000"
+      multiplier: "2"
+  security:
+    protocol: "SASL_SSL"
+  poll:
+    timeout: "30000"
+  concurrency: "2"
+
+# Salesforce Configuration - QA (Sandbox)
+salesforce:
+  auth:
+    url: "https://test.salesforce.com"
+  api:
+    version: "60.0"
+  external:
+    id:
+      field: "External_ID__c"
+  timeout: "30000"
+
+# Object Store Configuration - QA
+objectstore:
+  ttl: "12"
+  ttl:
+    unit: "HOURS"
+  max:
+    entries: "5000"
+
+# Logging Configuration - QA
+logging:
+  level: "INFO"
+  include:
+    payload: "false"
+
+# Retry Configuration - QA
+retry:
+  max:
+    attempts: "3"
+  delay:
+    ms: "1000"

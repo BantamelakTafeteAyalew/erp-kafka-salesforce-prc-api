@@ -1,0 +1,66 @@
+# =====================================================
+# ERP Kafka Salesforce Integration - DEV Environment
+# =====================================================
+
+# HTTP Configuration - DEV
+http:
+  host: "0.0.0.0"
+  port: "8081"
+  basePath: "/api/v1"
+
+# Kafka Configuration - DEV
+kafka:
+  bootstrap:
+    servers: "dev-kafka.example.com:9092"
+  consumer:
+    group:
+      id: "erp-salesforce-consumer-group-dev"
+  input:
+    topic: "erp-events-dev"
+  dlq:
+    topic: "erp-events-dlq-dev"
+  offset:
+    strategy: "EARLIEST"
+  retry:
+    count: "3"
+    backoff:
+      initial: "1000"
+      max: "30000"
+      multiplier: "2"
+  security:
+    protocol: "SASL_SSL"
+  poll:
+    timeout: "30000"
+  concurrency: "1"
+
+# Salesforce Configuration - DEV (Sandbox)
+salesforce:
+  auth:
+    url: "https://test.salesforce.com"
+  api:
+    version: "60.0"
+  external:
+    id:
+      field: "External_ID__c"
+  timeout: "30000"
+
+# Object Store Configuration - DEV
+objectstore:
+  ttl: "1"
+  ttl:
+    unit: "HOURS"
+  max:
+    entries: "1000"
+
+# Logging Configuration - DEV (More verbose)
+logging:
+  level: "DEBUG"
+  include:
+    payload: "true"
+
+# Retry Configuration - DEV
+retry:
+  max:
+    attempts: "3"
+  delay:
+    ms: "1000"

@@ -1,0 +1,66 @@
+# =====================================================
+# ERP Kafka Salesforce Integration - PROD Environment
+# =====================================================
+
+# HTTP Configuration - PROD
+http:
+  host: "0.0.0.0"
+  port: "8081"
+  basePath: "/api/v1"
+
+# Kafka Configuration - PROD
+kafka:
+  bootstrap:
+    servers: "prod-kafka.example.com:9092"
+  consumer:
+    group:
+      id: "erp-salesforce-consumer-group-prod"
+  input:
+    topic: "erp-events"
+  dlq:
+    topic: "erp-events-dlq"
+  offset:
+    strategy: "LATEST"
+  retry:
+    count: "5"
+    backoff:
+      initial: "2000"
+      max: "60000"
+      multiplier: "2"
+  security:
+    protocol: "SASL_SSL"
+  poll:
+    timeout: "60000"
+  concurrency: "5"
+
+# Salesforce Configuration - PROD
+salesforce:
+  auth:
+    url: "https://login.salesforce.com"
+  api:
+    version: "60.0"
+  external:
+    id:
+      field: "External_ID__c"
+  timeout: "60000"
+
+# Object Store Configuration - PROD
+objectstore:
+  ttl: "24"
+  ttl:
+    unit: "HOURS"
+  max:
+    entries: "50000"
+
+# Logging Configuration - PROD
+logging:
+  level: "WARN"
+  include:
+    payload: "false"
+
+# Retry Configuration - PROD
+retry:
+  max:
+    attempts: "5"
+  delay:
+    ms: "2000"

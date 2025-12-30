@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Routing Subflow
+     =====================================================
+     This file contains event routing logic:
+     - Routes events to appropriate handlers based on eventType
+     - Supports multiple ERP event types
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+
+    <!-- =====================================================
+         MAIN ROUTING SUBFLOW
+         Routes events to appropriate processing flows
+         ===================================================== -->
+    <sub-flow name="routing-subflow" doc:name="Routing Subflow">
+        <logger level="DEBUG" 
+            message='#["[ROUTING] Routing event - EventType: " ++ vars.eventType ++ " - SourceSystem: " ++ vars.sourceSystem ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Routing Start"/>
+        
+        <!-- Route based on event type -->
+        <choice doc:name="Route by Event Type">
+            
+            <!-- =====================================================
+                 CUSTOMER EVENTS
+                 ===================================================== -->
+            <when expression="#[vars.eventType == 'CUSTOMER_CREATED']">
+                <logger level="INFO" 
+                    message='#["[ROUTING] Routing to CUSTOMER_CREATED handler - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Customer Created Route"/>
+                <flow-ref name="process-customer-created-flow" doc:name="Process Customer Created"/>
+            </when>
+            
+            <when expression="#[vars.eventType == 'CUSTOMER_UPDATED']">
+                <logger level="INFO" 
+                    message='#["[ROUTING] Routing to CUSTOMER_UPDATED handler - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Customer Updated Route"/>
+                <flow-ref name="process-customer-updated-flow" doc:name="Process Customer Updated"/>
+            </when>
+            
+            <!-- =====================================================
+                 CONTACT EVENTS
+                 ===================================================== -->
+            <when expression="#[vars.eventType == 'CONTACT_CREATED']">
+                <logger level="INFO" 
+                    message='#["[ROUTING] Routing to CONTACT_CREATED handler - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Contact Created Route"/>
+                <flow-ref name="process-contact-created-flow" doc:name="Process Contact Created"/>
+            </when>
+            
+            <when expression="#[vars.eventType == 'CONTACT_UPDATED']">
+                <logger level="INFO" 
+                    message='#["[ROUTING] Routing to CONTACT_UPDATED handler - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Contact Updated Route"/>
+                <!-- Reuse contact created flow for updates (upsert handles both) -->
+                <flow-ref name="process-contact-created-flow" doc:name="Process Contact Updated"/>
+            </when>
+            
+            <!-- =====================================================
+                 ORDER EVENTS
+                 ===================================================== -->
+            <when expression="#[vars.eventType == 'ORDER_CREATED']">
+                <logger level="INFO" 
+                    message='#["[ROUTING] Routing to ORDER_CREATED handler - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Order Created Route"/>
+                <flow-ref name="process-order-created-flow" doc:name="Process Order Created"/>
+            </when>
+            
+            <when expression="#[vars.eventType == 'ORDER_UPDATED']">
+                <logger level="INFO" 
+                    message='#["[ROUTING] Routing to ORDER_UPDATED handler - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Order Updated Route"/>
+                <!-- Reuse order created flow for updates (upsert handles both) -->
+                <flow-ref name="process-order-created-flow" doc:name="Process Order Updated"/>
+            </when>
+            
+            <!-- =====================================================
+                 UNKNOWN/UNSUPPORTED EVENTS
+                 ===================================================== -->
+            <otherwise>
+                <logger level="WARN" 
+                    message='#["[ROUTING] Unknown event type, routing to generic handler - EventType: " ++ vars.eventType ++ " - CorrelationId: " ++ vars.correlationId]'
+                    doc:name="Log Unknown Event Route"/>
+                <flow-ref name="process-unknown-event-flow" doc:name="Process Unknown Event"/>
+            </otherwise>
+            
+        </choice>
+        
+        <logger level="DEBUG" 
+            message='#["[ROUTING] Routing complete - EventType: " ++ vars.eventType ++ " - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Routing Complete"/>
+    </sub-flow>
+
+</mule>

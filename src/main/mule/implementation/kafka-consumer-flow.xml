@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Kafka Consumer Flow
+     =====================================================
+     This file contains the Kafka consumer implementation:
+     - Message listener with manual offset commit
+     - At-least-once delivery guarantee
+     - Metadata extraction
+     - Routing to processing flow
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- =====================================================
+         KAFKA CONSUMER FLOW
+         Main entry point for ERP events from Kafka
+         Manual offset commit after successful processing
+         ===================================================== -->
+    <flow name="kafka-consumer-flow" doc:name="Kafka Consumer Flow">
+        <!-- Kafka Message Listener with Manual Acknowledgement -->
+        <kafka:message-listener 
+            topic="${kafka.input.topic}"
+            ackMode="MANUAL"
+            doc:name="Kafka Message Listener">
+            <reconnect-forever frequency="10000"/>
+        </kafka:message-listener>
+        
+        <!-- =====================================================
+             STEP 1: Capture Kafka Metadata
+             Store attributes in variables before payload changes
+             ===================================================== -->
+        <ee:transform doc:name="Capture Kafka Metadata">
+            <ee:variables>
+                <!-- Critical: Capture commit key for manual acknowledgement -->
+                <ee:set-variable variableName="kafkaCommitKey"><![CDATA[%dw 2.0
+output application/java
+---
+attributes.consumerCommitKey]]></ee:set-variable>
+                
+                <!-- Kafka message metadata for logging and tracking -->
+                <ee:set-variable variableName="kafkaTopic"><![CDATA[attributes.topic]]></ee:set-variable>
+                <ee:set-variable variableName="kafkaPartition"><![CDATA[attributes.partition]]></ee:set-variable>
+                <ee:set-variable variableName="kafkaOffset"><![CDATA[attributes.offset]]></ee:set-variable>
+                <ee:set-variable variableName="kafkaKey"><![CDATA[attributes.key as String default ""]]></ee:set-variable>
+                <ee:set-variable variableName="kafkaTimestamp"><![CDATA[attributes.creationTimestamp]]></ee:set-variable>
+                
+                <!-- Extract correlation ID from headers or generate new one -->
+                <ee:set-variable variableName="correlationId"><![CDATA[%dw 2.0
+output application/java
+---
+attributes.headers."correlation-id" default 
+attributes.headers."correlationId" default 
+uuid()]]></ee:set-variable>
+                
+                <!-- Processing start time for metrics -->
+                <ee:set-variable variableName="processingStartTime"><![CDATA[now()]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <!-- Log message receipt -->
+        <flow-ref name="logging-message-received-subflow" doc:name="Log Message Received"/>
+        
+        <!-- =====================================================
+             STEP 2: Parse and Validate Message
+             ===================================================== -->
+        <try doc:name="Parse and Process Message">
+            <!-- Parse JSON payload -->
+            <ee:transform doc:name="Parse JSON Payload">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+read(payload, "application/json")]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <!-- Store original payload for DLQ if needed -->
+                    <ee:set-variable variableName="originalPayload"><![CDATA[payload]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            
+            <!-- Extract event metadata -->
+            <ee:transform doc:name="Extract Event Metadata">
+                <ee:variables>
+                    <ee:set-variable variableName="eventType"><![CDATA[payload.eventType default "UNKNOWN"]]></ee:set-variable>
+                    <ee:set-variable variableName="sourceSystem"><![CDATA[payload.sourceSystem default "UNKNOWN"]]></ee:set-variable>
+                    <ee:set-variable variableName="eventTime"><![CDATA[payload.eventTime]]></ee:set-variable>
+                    <ee:set-variable variableName="eventCorrelationId"><![CDATA[payload.correlationId default vars.correlationId]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            
+            <!-- Update correlation ID if present in event -->
+            <set-variable variableName="correlationId" 
+                value="#[vars.eventCorrelationId]" 
+                doc:name="Update Correlation ID"/>
+            
+            <!-- =====================================================
+                 STEP 3: Idempotency Check
+                 Prevent duplicate processing
+                 ===================================================== -->
+            <flow-ref name="idempotency-check-subflow" doc:name="Check Idempotency"/>
+            
+            <choice doc:name="Already Processed?">
+                <when expression="#[vars.alreadyProcessed == true]">
+                    <logger level="INFO" 
+                        message='#["[DUPLICATE] Message already processed - CorrelationId: " ++ vars.correlationId ++ " - Offset: " ++ vars.kafkaOffset]'
+                        doc:name="Log Duplicate"/>
+                </when>
+                <otherwise>
+                    <!-- =====================================================
+                         STEP 4: Validate Event
+                         ===================================================== -->
+                    <flow-ref name="validation-subflow" doc:name="Validate Event"/>
+                    
+                    <!-- =====================================================
+                         STEP 5: Route to Appropriate Handler
+                         ===================================================== -->
+                    <flow-ref name="routing-subflow" doc:name="Route Event"/>
+                    
+                    <!-- =====================================================
+                         STEP 6: Mark as Processed (Idempotency)
+                         ===================================================== -->
+                    <flow-ref name="idempotency-mark-processed-subflow" doc:name="Mark as Processed"/>
+                </otherwise>
+            </choice>
+            
+            <!-- =====================================================
+                 STEP 7: Commit Kafka Offset
+                 Only after successful processing
+                 ===================================================== -->
+            <kafka:commit 
+                commitKey="#[vars.kafkaCommitKey]"
+                doc:name="Commit Kafka Offset"/>
+            
+            <!-- Log successful processing -->
+            <flow-ref name="logging-message-processed-subflow" doc:name="Log Message Processed"/>
+            
+            <error-handler>
+                <!-- Transient errors - don't commit, allow retry -->
+                <on-error-propagate type="SALESFORCE:CONNECTIVITY, KAFKA:CONNECTIVITY, MULE:RETRY_EXHAUSTED"
+                    enableNotifications="true"
+                    logException="true"
+                    doc:name="Transient Error - No Commit">
+                    <logger level="ERROR" 
+                        message='#["[TRANSIENT_ERROR] Will retry - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log Transient Error"/>
+                    <!-- Don't commit - message will be redelivered -->
+                </on-error-propagate>
+                
+                <!-- Non-transient errors - send to DLQ and commit -->
+                <on-error-continue type="ANY"
+                    enableNotifications="true"
+                    logException="true"
+                    doc:name="Non-Transient Error - DLQ">
+                    <logger level="ERROR" 
+                        message='#["[DLQ_REQUIRED] Sending to DLQ - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log DLQ Required"/>
+                    
+                    <!-- Capture error details -->
+                    <set-variable variableName="errorDescription" value="#[error.description]" doc:name="Capture Error Description"/>
+                    <set-variable variableName="errorType" value="#[error.errorType.identifier]" doc:name="Capture Error Type"/>
+                    
+                    <!-- Publish to DLQ -->
+                    <flow-ref name="dlq-publish-subflow" doc:name="Publish to DLQ"/>
+                    
+                    <!-- Commit offset to prevent infinite retry loop -->
+                    <kafka:commit 
+                        commitKey="#[vars.kafkaCommitKey]"
+                        doc:name="Commit After DLQ"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </flow>
+
+    <!-- =====================================================
+         IDEMPOTENCY CHECK SUBFLOW
+         Checks if message was already processed
+         ===================================================== -->
+    <sub-flow name="idempotency-check-subflow" doc:name="Idempotency Check Subflow">
+        <try doc:name="Try Retrieve">
+            <os:retrieve key="#[vars.correlationId]" 
+                objectStore="Idempotent_Message_Store" 
+                target="processedRecord"
+                doc:name="Check If Processed">
+                <os:default-value><![CDATA[#[null]]]></os:default-value>
+            </os:retrieve>
+            
+            <set-variable variableName="alreadyProcessed" 
+                value="#[vars.processedRecord != null]" 
+                doc:name="Set Already Processed Flag"/>
+            
+            <error-handler>
+                <on-error-continue type="ANY">
+                    <set-variable variableName="alreadyProcessed" value="#[false]" doc:name="Default to Not Processed"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- =====================================================
+         IDEMPOTENCY MARK PROCESSED SUBFLOW
+         Marks message as processed in object store
+         ===================================================== -->
+    <sub-flow name="idempotency-mark-processed-subflow" doc:name="Idempotency Mark Processed Subflow">
+        <os:store key="#[vars.correlationId]" 
+            objectStore="Idempotent_Message_Store"
+            failIfPresent="false"
+            doc:name="Mark as Processed">
+            <os:value><![CDATA[#[%dw 2.0
+output application/json
+---
+{
+    processedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"},
+    eventType: vars.eventType,
+    kafkaOffset: vars.kafkaOffset,
+    kafkaPartition: vars.kafkaPartition
+}]]]></os:value>
+        </os:store>
+    </sub-flow>
+
+</mule>

@@ -1,0 +1,32 @@
+# =====================================================
+# ERP Kafka Salesforce Integration - DEV Secure Props
+# =====================================================
+# IMPORTANT: Replace placeholder values with actual
+# encrypted values using the Secure Properties Tool:
+# java -cp secure-properties-tool.jar \
+#   com.mulesoft.tools.SecurePropertiesTool \
+#   string encrypt AES CBC <your-dev-key> <value>
+# =====================================================
+
+# Kafka Security Credentials - DEV
+kafka:
+  username: "![ENCRYPTED_DEV_KAFKA_USERNAME]"
+  password: "![ENCRYPTED_DEV_KAFKA_PASSWORD]"
+  truststore:
+    password: "![ENCRYPTED_DEV_TRUSTSTORE_PASSWORD]"
+
+# Salesforce OAuth Credentials - DEV (Sandbox)
+salesforce:
+  username: "![ENCRYPTED_DEV_SF_USERNAME]"
+  password: "![ENCRYPTED_DEV_SF_PASSWORD]"
+  security:
+    token: "![ENCRYPTED_DEV_SF_SECURITY_TOKEN]"
+  client:
+    id: "![ENCRYPTED_DEV_SF_CLIENT_ID]"
+    secret: "![ENCRYPTED_DEV_SF_CLIENT_SECRET]"
+
+# API Security - DEV
+api:
+  client:
+    id: "![ENCRYPTED_DEV_API_CLIENT_ID]"
+    secret: "![ENCRYPTED_DEV_API_CLIENT_SECRET]"

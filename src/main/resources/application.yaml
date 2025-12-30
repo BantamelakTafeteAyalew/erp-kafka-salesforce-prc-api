@@ -1,0 +1,74 @@
+# =====================================================
+# ERP Kafka Salesforce Integration - Base Configuration
+# =====================================================
+# This file contains default/shared configuration values
+# Environment-specific files override these values
+# =====================================================
+
+# Application Metadata
+app:
+  name: "erp-kafka-salesforce-integration"
+  version: "1.0.0"
+
+# HTTP Listener Configuration
+http:
+  host: "0.0.0.0"
+  port: "8081"
+  basePath: "/api/v1"
+
+# Kafka Consumer Configuration
+kafka:
+  bootstrap:
+    servers: "localhost:9092"
+  consumer:
+    group:
+      id: "erp-salesforce-consumer-group"
+  input:
+    topic: "erp-events"
+  dlq:
+    topic: "erp-events-dlq"
+  offset:
+    strategy: "EARLIEST"
+  retry:
+    count: "3"
+    backoff:
+      initial: "1000"
+      max: "30000"
+      multiplier: "2"
+  security:
+    protocol: "SASL_SSL"
+  poll:
+    timeout: "30000"
+  concurrency: "3"
+
+# Salesforce Configuration
+salesforce:
+  auth:
+    url: "https://login.salesforce.com"
+  api:
+    version: "60.0"
+  external:
+    id:
+      field: "External_ID__c"
+  timeout: "30000"
+
+# Object Store Configuration
+objectstore:
+  ttl: "24"
+  ttl:
+    unit: "HOURS"
+  max:
+    entries: "10000"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  include:
+    payload: "false"
+
+# Retry Configuration
+retry:
+  max:
+    attempts: "3"
+  delay:
+    ms: "1000"

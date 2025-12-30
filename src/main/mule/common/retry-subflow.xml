@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =====================================================
+     ERP Kafka Salesforce Integration - Retry Subflow
+     =====================================================
+     This file contains retry logic:
+     - Exponential backoff
+     - Retry counter management
+     - Circuit breaker pattern support
+     ===================================================== -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- =====================================================
+         INCREMENT RETRY COUNTER SUBFLOW
+         Increments and tracks retry attempts
+         ===================================================== -->
+    <sub-flow name="retry-increment-counter-subflow" doc:name="Increment Retry Counter Subflow">
+        <logger level="DEBUG" 
+            message='#["[RETRY] Incrementing retry counter - CorrelationId: " ++ vars.correlationId]'
+            doc:name="Log Retry Increment"/>
+        
+        <!-- Try to retrieve existing retry count -->
+        <try doc:name="Try Get Retry Count">
+            <os:retrieve key="#[vars.correlationId]" 
+                objectStore="Retry_Counter_Store" 
+                target="existingRetryCount"
+                doc:name="Get Retry Count">
+                <os:default-value><![CDATA[#[0]]]></os:default-value>
+            </os:retrieve>
+            
+            <error-handler>
+                <on-error-continue type="ANY">
+                    <set-variable variableName="existingRetryCount" value="#[0]" doc:name="Default to 0"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+        
+        <!-- Increment counter -->
+        <set-variable variableName="retryCount" 
+            value="#[(vars.existingRetryCount as Number default 0) + 1]" 
+            doc:name="Increment Counter"/>
+        
+        <!-- Store updated count -->
+        <os:store key="#[vars.correlationId]" 
+            objectStore="Retry_Counter_Store"
+            failIfPresent="false"
+            doc:name="Store Retry Count">
+            <os:value><![CDATA[#[vars.retryCount]]]></os:value>
+        </os:store>
+        
+        <logger level="INFO" 
+            message='#["[RETRY] Counter updated - CorrelationId: " ++ vars.correlationId ++ " - RetryCount: " ++ vars.retryCount]'
+            doc:name="Log Retry Count"/>
+    </sub-flow>
+
+    <!-- =====================================================
+         CHECK RETRY LIMIT SUBFLOW
+         Checks if retry limit has been exceeded
+         ===================================================== -->
+    <sub-flow name="retry-check-limit-subflow" doc:name="Check Retry Limit Subflow">
+        <logger level="DEBUG" 
+            message='#["[RETRY] Checking retry limit - CorrelationId: " ++ vars.correlationId ++ " - CurrentCount: " ++ vars.retryCount]'
+            doc:name="Log Check Limit"/>
+        
+        <!-- Compare against configured max retries -->
+        <ee:transform doc:name="Check Limit">
+            <ee:variables>
+                <ee:set-variable variableName="retryLimitExceeded"><![CDATA[%dw 2.0
+output application/java
+---
+(vars.retryCount as Number default 0) >= (p('kafka.retry.count') as Number default 3)]]></ee:set-variable>
+                <ee:set-variable variableName="maxRetries"><![CDATA[%dw 2.0
+output application/java
+---
+p('kafka.retry.count') as Number default 3]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <choice doc:name="Limit Exceeded?">
+            <when expression="#[vars.retryLimitExceeded == true]">
+                <logger level="WARN" 
+                    message='#["[RETRY] Limit exceeded - CorrelationId: " ++ vars.correlationId ++ " - MaxRetries: " ++ vars.maxRetries]'
+                    doc:name="Log Limit Exceeded"/>
+            </when>
+            <otherwise>
+                <logger level="DEBUG" 
+                    message='#["[RETRY] Within limit - CorrelationId: " ++ vars.correlationId ++ " - Remaining: " ++ (vars.maxRetries - vars.retryCount)]'
+                    doc:name="Log Within Limit"/>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <!-- =====================================================
+         CALCULATE BACKOFF DELAY SUBFLOW
+         Calculates exponential backoff delay
+         ===================================================== -->
+    <sub-flow name="retry-calculate-backoff-subflow" doc:name="Calculate Backoff Delay Subflow">
+        <ee:transform doc:name="Calculate Exponential Backoff">
+            <ee:variables>
+                <ee:set-variable variableName="backoffDelay"><![CDATA[%dw 2.0
+output application/java
+// Exponential backoff: initial * (multiplier ^ retryCount)
+// With max cap to prevent excessive delays
+var initialDelay = p('kafka.retry.backoff.initial') as Number default 1000
+var maxDelay = p('kafka.retry.backoff.max') as Number default 30000
+var multiplier = p('kafka.retry.backoff.multiplier') as Number default 2
+var retryNum = vars.retryCount as Number default 1
+var calculatedDelay = initialDelay * (multiplier pow (retryNum - 1))
+---
+if (calculatedDelay > maxDelay) maxDelay else calculatedDelay]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        
+        <logger level="DEBUG" 
+            message='#["[RETRY] Backoff calculated - CorrelationId: " ++ vars.correlationId ++ " - DelayMs: " ++ vars.backoffDelay]'
+            doc:name="Log Backoff Delay"/>
+    </sub-flow>
+
+    <!-- =====================================================
+         CLEAR RETRY COUNTER SUBFLOW
+         Clears retry counter after successful processing
+         ===================================================== -->
+    <sub-flow name="retry-clear-counter-subflow" doc:name="Clear Retry Counter Subflow">
+        <try doc:name="Try Clear Counter">
+            <os:remove key="#[vars.correlationId]" 
+                objectStore="Retry_Counter_Store"
+                doc:name="Remove Retry Counter"/>
+            
+            <logger level="DEBUG" 
+                message='#["[RETRY] Counter cleared - CorrelationId: " ++ vars.correlationId]'
+                doc:name="Log Counter Cleared"/>
+            
+            <error-handler>
+                <on-error-continue type="OS:KEY_NOT_FOUND">
+                    <!-- Key doesn't exist, which is fine -->
+                    <logger level="DEBUG" 
+                        message='#["[RETRY] No counter to clear - CorrelationId: " ++ vars.correlationId]'
+                        doc:name="Log No Counter"/>
+                </on-error-continue>
+                <on-error-continue type="ANY">
+                    <logger level="WARN" 
+                        message='#["[RETRY] Error clearing counter - CorrelationId: " ++ vars.correlationId ++ " - Error: " ++ error.description]'
+                        doc:name="Log Clear Error"/>
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+</mule>

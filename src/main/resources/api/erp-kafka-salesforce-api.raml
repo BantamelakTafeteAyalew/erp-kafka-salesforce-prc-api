@@ -1,0 +1,108 @@
+#%RAML 1.0
+title: ERP Kafka Salesforce Integration API
+version: v1
+protocols: [ HTTPS ]
+mediaType: application/json
+
+securitySchemes:
+  client_id_enforcement:
+    type: x-client-id-enforcement
+    describedBy:
+      headers:
+        client_id:
+          type: string
+          required: true
+        client_secret:
+          type: string
+          required: true
+
+securedBy:
+  - client_id_enforcement
+
+types:
+  HealthResponse:
+    type: object
+    properties:
+      status: string
+      timestamp: string
+      version: string
+      kafka:
+        type: object
+        properties:
+          status: string
+          topic: string
+      salesforce:
+        type: object
+        properties:
+          status: string
+
+  ErrorResponse:
+    type: object
+    properties:
+      errorCode: string
+      errorMessage: string
+      correlationId: string
+      timestamp: string
+
+  ERPEvent:
+    type: object
+    properties:
+      eventType: string
+      sourceSystem: string
+      eventTime: string
+      correlationId: string
+      payload:
+        type: object
+        properties:
+          externalId: string
+          name: string
+          industry?: string
+          country?: string
+
+  ProcessingResponse:
+    type: object
+    properties:
+      status: string
+      correlationId: string
+      salesforceId?: string
+      message: string
+
+/health:
+  get:
+    description: Application health check - verifies connectivity to Kafka and Salesforce
+    responses:
+      200:
+        body:
+          application/json:
+            type: HealthResponse
+            example:
+              status: "UP"
+              timestamp: "2025-01-10T10:45:00Z"
+              version: "v1"
+              kafka:
+                status: "CONNECTED"
+                topic: "erp-events"
+              salesforce:
+                status: "CONNECTED"
+      500:
+        body:
+          application/json:
+            type: ErrorResponse
+            example:
+              errorCode: "HEALTH_CHECK_FAILED"
+              errorMessage: "One or more services are unavailable"
+              correlationId: "abc-123"
+              timestamp: "2025-01-10T10:45:00Z"
+
+/status:
+  get:
+    description: Detailed application status including metrics
+    responses:
+      200:
+        body:
+          application/json:
+            example:
+              status: "UP"
+              uptime: "24h 30m"
+              messagesProcessed: 15000
+              lastProcessedTime: "2025-01-10T10:45:00Z"
