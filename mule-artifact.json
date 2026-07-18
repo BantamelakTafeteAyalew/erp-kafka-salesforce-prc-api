@@ -1,5 +1,5 @@
 {
-  "minMuleVersion": "4.9.3",
+  "minMuleVersion": "4.8.1",
   "javaSpecificationVersions": ["17"],
   "requiredProduct": "MULE_EE",
   "classLoaderModelLoaderDescriptor": {
